@@ -42,19 +42,20 @@ export const signInByOAuth = async (
 	})
 }
 
-export const signInByAuth = async (
-	reqBody: SignInType,
-): Promise<SignInResponse> => {
+export const signInByAuth = async (credentials: SignInType): Promise<SignInResponse> => {
 	return actionHandler<SignInResponse>({
-		name: "signIn",
-		url: "/v1/auth/login",
+		name: "signInByAuth",
+		url: `/v2/auth/login`,
 		options: {
+			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				"X-Session-ID": credentials.sessionId,
 			},
-			method: "POST",
-			body: JSON.stringify(reqBody),
-			cache: "no-cache",
+			body: JSON.stringify({
+				username: credentials.email,
+				password: credentials.password,
+			}),
 		},
-	})
-}
+	});
+};

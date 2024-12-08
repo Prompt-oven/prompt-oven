@@ -10,6 +10,7 @@ export interface AuthMemberType {
 export interface SignInType {
 	email: string
 	password: string
+	sessionId: string
 }
 
 // 로그아웃 헤더

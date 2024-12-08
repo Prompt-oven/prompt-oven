@@ -8,6 +8,7 @@ import { refreshAccessToken } from "@/action/auth/authTokenAction"
 import type { ExtendedToken } from "@/types/auth/AuthToken"
 import { logoutAuthMember } from "@/action/auth/memberManageAction"
 import { getProfileImage } from "@/action/profile/getProfilePic"
+import { encryptPasswordWithDH, destroyDHSession } from "@/action/auth/dhAction"
 
 export const authOptions: NextAuthOptions = {
 	session: {
@@ -27,106 +28,124 @@ export const authOptions: NextAuthOptions = {
 					return null
 				}
 
-                const response = await signInByAuth({
-                    email: credentials.email,
-                    password: credentials.password,
-                });
-                const profileImage = await getProfileImage(response.result.memberUUID)
-                console.log("signInByAuth",response)
-                return {
-                    accesstoken: response.result.accesstoken,
-                    refreshtoken: response.result.refreshtoken,
-                    email: credentials.email,
-                    nickname: response.result.nickname,
-                    memberUUID: response.result.memberUUID,
-                    role: response.result.role,
-                    profileImage: profileImage.picture || "",
-                    failed: false,
-                };
-            },
-        }),
-        NaverProvider({
-            clientId: process.env.NAVER_CLIENT_ID || "",
-            clientSecret: process.env.NAVER_CLIENT_SECRET || "",
-        }),
-        KakaoProvider({
-            clientId: process.env.KAKAO_CLIENT_ID || "",
-            clientSecret: process.env.KAKAO_CLIENT_SECRET || "",
-        }),
-        GoogleProvider({
-            clientId: process.env.GOOGLE_CLIENT_ID || "",
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-        }),
-    ],
-    secret: process.env.NEXTAUTH_SECRET,
-    callbacks: {
-        async signIn({ user, account, profile }) {
-          if (account?.provider === "credentials") {
-            if (user) {
-              return true;
-            } else {
-              return false;
-            }
-          }
-            //소셜 로그인 공통 처리
-            if (account?.provider) {
-              console.log(`${account.provider} Sign-In detected:`, account, profile)
+				try {
+					// Encrypt password using DH key exchange
+					const { encryptedPassword, sessionId } = await encryptPasswordWithDH(credentials.password)
+					// Call sign-in API with encrypted password
+					const response = await signInByAuth({
+						email: credentials.email,
+						password: encryptedPassword,
+						sessionId,
+					})
 
-              let providerID: string;
-              let email: string | undefined
+					// Check if response.result is valid
+					if (!response || !response.result) {
+						console.error("Invalid response from sign-in API:", response)
+						return null
+					}
+					// Cleanup: Destroy DH session after use
+					await destroyDHSession(sessionId);
 
-              switch (account.provider) {
-                case "google":
-                  providerID = account.id as string
-                  email = profile?.email || "";
-                  break;
+					const profileImage = await getProfileImage(response.result.memberUUID)
+					
+					return {
+						accesstoken: response.result.accesstoken,
+						refreshtoken: response.result.refreshtoken,
+						email: credentials.email,
+						nickname: response.result.nickname,
+						memberUUID: response.result.memberUUID,
+						role: response.result.role,
+						profileImage: profileImage.picture || "",
+						failed: false,
+					};
+				} catch (error) {
+					console.error("Authentication error:", error)
+					return null
+				}
+			},
+		}),
+		NaverProvider({
+			clientId: process.env.NAVER_CLIENT_ID || "",
+			clientSecret: process.env.NAVER_CLIENT_SECRET || "",
+		}),
+		KakaoProvider({
+			clientId: process.env.KAKAO_CLIENT_ID || "",
+			clientSecret: process.env.KAKAO_CLIENT_SECRET || "",
+		}),
+		GoogleProvider({
+			clientId: process.env.GOOGLE_CLIENT_ID || "",
+			clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+		}),
+	],
+	secret: process.env.NEXTAUTH_SECRET,
+	callbacks: {
+		async signIn({ user, account, profile }) {
+			if (account?.provider === "credentials") {
+				if (user) {
+					return true;
+				} else {
+					return false;
+				}
+			}
+			//소셜 로그인 공통 처리
+			if (account?.provider) {
+				console.log(`${account.provider} Sign-In detected:`, account, profile)
 
-                case "naver":
-                  providerID = account.id as string
-                  email = user.email || "";
-                  break;
+				let providerID: string;
+				let email: string | undefined
 
-                case "kakao":
-                  providerID = account.id as string
-                  email = user.email || "";
-                  break;
+				switch (account.provider) {
+					case "google":
+						providerID = account.id as string
+						email = profile?.email || "";
+						break;
 
-                default:
-                  console.error("Unsupported provider:", account.provider)
-                  return false;
-              }
+					case "naver":
+						providerID = account.id as string
+						email = user.email || "";
+						break;
 
-              // OAuth API 호출
-              const response = await signInByOAuth({
-                provider: account.provider,
-                providerID,
-                email,
-              });
+					case "kakao":
+						providerID = account.id as string
+						email = user.email || "";
+						break;
 
-              if (response) {
-                // eslint-disable-next-line no-console -- This is a client-side only log
-                console.log(`${account.provider} OAuth API response:`, response)
-                return true
-              } else {
-                // eslint-disable-next-line no-console -- This is a client-side only log
-                console.error(`${account.provider} OAuth API failed:`, response)
-                return '/sign-up';
-              }
-            }
-            return true;
-          },
-          async jwt({ token, user }): Promise<ExtendedToken> {
-            if (user) {
-                token.accesstoken = user.accesstoken
-                token.refreshtoken = user.refreshtoken
-                token.tokenExpiration = Date.now() + 24 * 60 * 60 * 1000
-            }
-            if (Date.now() >= (token.tokenExpiration as number || 0)) {
-                const refreshedToken = await refreshAccessToken(token.refreshtoken as string || "")
-                if (refreshedToken.result) {
-                  const profileImage = await getProfileImage(user.memberUUID)
-                  token.profileImage = profileImage.picture || ""
-                  user.profileImage = profileImage.picture || ""
+					default:
+						console.error("Unsupported provider:", account.provider)
+						return false;
+				}
+
+				// OAuth API 호출
+				const response = await signInByOAuth({
+					provider: account.provider,
+					providerID,
+					email,
+				});
+
+				if (response) {
+					// eslint-disable-next-line no-console -- This is a client-side only log
+					console.log(`${account.provider} OAuth API response:`, response)
+					return true
+				} else {
+					// eslint-disable-next-line no-console -- This is a client-side only log
+					console.error(`${account.provider} OAuth API failed:`, response)
+					return '/sign-up';
+				}
+			}
+			return true;
+		},
+		async jwt({ token, user }): Promise<ExtendedToken> {
+			if (user) {
+				token.accesstoken = user.accesstoken
+				token.refreshtoken = user.refreshtoken
+				token.tokenExpiration = Date.now() + 24 * 60 * 60 * 1000
+			}
+			if (Date.now() >= (token.tokenExpiration as number || 0)) {
+				const refreshedToken = await refreshAccessToken(token.refreshtoken as string || "")
+				if (refreshedToken.result) {
+					const profileImage = await getProfileImage(user.memberUUID)
+					token.profileImage = profileImage.picture || ""
+					user.profileImage = profileImage.picture || ""
 
 					token.accesstoken = refreshedToken.result.accessToken
 					user.accesstoken = refreshedToken.result.accessToken
